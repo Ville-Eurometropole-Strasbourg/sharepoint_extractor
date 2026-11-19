@@ -198,6 +198,8 @@ If the farm uses an internal CA:
 
 ## Development
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to report bugs and propose changes.
+
 ```bash
 pip install -r requirements.txt -r requirements-dev.txt
 python3 -m unittest discover -s tests
@@ -209,3 +211,7 @@ Tests make no network call.
 ## License
 
 [MIT](LICENSE)
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Do not open a public issue for security problems.
