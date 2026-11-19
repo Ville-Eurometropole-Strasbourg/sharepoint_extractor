@@ -25,7 +25,7 @@ Never paste credentials, tokens, cookie values or real internal hostnames: redac
    black src tests
    ```
 
-5. Open a pull request describing the problem and the solution, and reference the issue it fixes if there is one.
+5. Open a pull request describing the problem and the solution, and reference the issue it fixes if there is one. A GitHub Actions workflow (`.github/workflows/ci.yml`) runs the test suite and the `black --check` formatting check on every push and pull request, on several Python versions.
 
 ## Code style
 
