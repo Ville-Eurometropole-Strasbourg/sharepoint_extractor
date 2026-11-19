@@ -16,7 +16,7 @@ Security fixes are applied to the latest commit on `main`.
 Use one of these channels:
 
 - GitHub's private vulnerability reporting: on the repository page, go to **Security > Advisories > Report a vulnerability** (preferred, if the project is hosted on GitHub);
-- or email: `SECURITY-CONTACT@example.org` — **replace this address with the organization's security contact before publishing**.
+- or email: `opensource@strasbourg.eu`.
 
 A good report includes:
 
