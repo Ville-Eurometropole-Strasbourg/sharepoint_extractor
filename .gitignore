@@ -1,0 +1,15 @@
+# Secrets and certificates
+.env
+.env*
+!.env.example
+certs/
+
+# Data produced by the pipeline
+/discovery_output*/
+*.csv
+stats_summary.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/

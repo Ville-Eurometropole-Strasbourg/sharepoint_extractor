@@ -1,0 +1,17 @@
+# Mounted at run time, not baked into the image
+discovery_output*/
+certs/
+.env
+.env*
+!.env.example
+
+# Python, Git
+__pycache__/
+*.pyc
+.git/
+.venv/
+*.egg-info/
+
+# Data produced by the pipeline
+stats_summary.json
+*.csv
