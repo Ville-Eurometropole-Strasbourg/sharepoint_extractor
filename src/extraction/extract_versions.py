@@ -5,7 +5,8 @@ version plus every past version (label, size, date, author, comment, URL).
 
 - One call per file; files with a .versions.json are skipped (resume).
 - /versions excludes the current version, read from the File instead.
-- Labels in NO_HISTORY_LABELS have no history: no call made.
+- 0.1 drafts have no history: no call made. Neither has 1.0 in a library
+  without minor versions; the setting is read once per library.
 
 Usage (root = SPX_SITE_URL):
     python extract_versions.py <site_slug>
@@ -23,8 +24,24 @@ from sharepoint_client import get_config, build_context
 from site_urls import get_root_name
 from persistent_session import enable_persistent_session
 
-# First published version / first unpublished draft.
-NO_HISTORY_LABELS = ("1.0", "0.1")
+# First unpublished draft: never has a history.
+NO_HISTORY_LABELS = ("0.1",)
+# First published version: no history in a library without minor versions,
+# but with minor versions it is usually published from drafts 0.1, 0.2...
+FIRST_MAJOR_LABEL = "1.0"
+
+
+def needs_history(label, minor_versions):
+    """
+    Whether a file whose current version is `label` can have a history.
+    minor_versions is the library's EnableMinorVersions, None when unknown:
+    an unknown setting is treated as enabled, so no history is missed.
+    """
+    if label in NO_HISTORY_LABELS:
+        return False
+    if label == FIRST_MAJOR_LABEL:
+        return minor_versions is not False
+    return True
 
 
 def _user_info(user):
@@ -125,10 +142,25 @@ def fetch_versions(ctx, file_ref):
     }
 
 
+def library_minor_versions(ctx, file_ref):
+    """EnableMinorVersions of the library holding file_ref (one call)."""
+    library = (
+        ctx.web.get_file_by_server_relative_url(file_ref)
+        .listItemAllFields.parent_list.get()
+        .select(["EnableMinorVersions"])
+        .execute_query()
+    )
+    return library.properties.get("EnableMinorVersions")
+
+
 def extract_site_versions(site_dir, username, password, ca_bundle_path, logger):
     with open(os.path.join(site_dir, "site_metadata.json"), "r", encoding="utf-8") as f:
         site_url = json.load(f)["Url"]
     ctx = build_context(site_url, username, password, ca_bundle_path)
+    documents_dir = os.path.join(site_dir, "documents")
+    # Library folder under documents/ -> EnableMinorVersions, read once per
+    # library holding a 1.0 file; None when it could not be read.
+    minor_versions_by_library = {}
 
     counts = {
         "queried": 0,
@@ -152,11 +184,27 @@ def extract_site_versions(site_dir, username, password, ca_bundle_path, logger):
 
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
-        if meta.get("OData__UIVersionString") in NO_HISTORY_LABELS:
+        label = meta.get("OData__UIVersionString")
+        file_ref = meta.get("FileRef")
+        minor_versions = None
+        if label == FIRST_MAJOR_LABEL:
+            library = os.path.relpath(meta_path, documents_dir).split(os.sep)[0]
+            if library not in minor_versions_by_library:
+                try:
+                    minor_versions_by_library[library] = library_minor_versions(
+                        ctx, file_ref
+                    )
+                except Exception as e:
+                    minor_versions_by_library[library] = None
+                    logger.warning(
+                        f"  Could not read whether '{library}' keeps minor versions, "
+                        f"querying its 1.0 files: {e}"
+                    )
+            minor_versions = minor_versions_by_library[library]
+        if not needs_history(label, minor_versions):
             counts["skipped_no_history"] += 1
             continue
 
-        file_ref = meta.get("FileRef")
         try:
             result = fetch_versions(ctx, file_ref)
         except Exception as e:
