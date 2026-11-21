@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 from sharepoint_client import get_config, build_context
 from site_urls import absolute_url, get_root_name
 from persistent_session import enable_persistent_session
+from extract_metadata import relative_path_in_library
 
 ITEM_SELECT_FIELDS = [
     "FileLeafRef",
@@ -64,23 +65,6 @@ def _get_thread_context(site_url, username, password, ca_bundle_path):
     return _thread_local.ctx_by_site[site_url]
 
 
-def _relative_path_under_library(file_ref, library_title, name):
-    """
-    Path under the library from FileRef, keeping subfolders:
-    '/sites/hr/team/Documents/Sub/x.pdf' -> 'Sub/x.pdf'.
-    Falls back to `name` if FileRef lacks the library title.
-    """
-    if not file_ref:
-        return name
-    marker = f"/{library_title}/"
-    idx = file_ref.find(marker)
-    if idx == -1:
-        return name
-    relative = file_ref[idx + len(marker) :]
-    parts = [p for p in relative.split("/") if p not in ("", ".", "..")]
-    return os.path.join(*parts) if parts else name
-
-
 def _download_one_file(
     site_url,
     username,
@@ -104,9 +88,7 @@ def _download_one_file(
     is only logged. root_name/site_relative_url are copied into the result
     for the summary. by_url fetches by FileRef instead of list item Id.
     """
-    relative_path = relative_path or _relative_path_under_library(
-        file_ref, library_title, name
-    )
+    relative_path = relative_path or name
     local_path = os.path.join(lib_dir, relative_path)
     os.makedirs(os.path.dirname(local_path) or lib_dir, exist_ok=True)
 
@@ -193,18 +175,40 @@ def download_library(
         logger.error(f"Failed to read items from '{library_title}': {e}")
         sys.exit(1)
 
+    # Files are placed from the root folder URL, not the title: a library
+    # titled "Documents" may live in "Shared Documents".
+    library_root = None
+    try:
+        library_root = (
+            sp_list.root_folder.get()
+            .execute_query()
+            .properties.get("ServerRelativeUrl")
+        )
+    except Exception as e:
+        logger.warning(
+            f"Could not read the root folder of '{library_title}', "
+            f"writing files flat: {e}"
+        )
+
     files_to_download = []
     for item in items:
         props = item.properties
         if props.get("FileSystemObjectType") == 1:
             continue
         name = props.get("FileLeafRef") or f"item_{props.get('Id')}"
+        # Same layout as the .meta.json written by extract_metadata.py.
+        relative = relative_path_in_library(props.get("FileRef"), library_root)
         files_to_download.append(
             (
                 name,
                 props.get("FileRef"),
                 props.get("Id"),
                 _parse_size(props.get("FileSizeDisplay")),
+                (
+                    os.path.join(*relative.split("/"))
+                    if relative
+                    else name.replace("/", "_")
+                ),
             )
         )
     if limit is not None and len(files_to_download) > limit:
@@ -230,8 +234,9 @@ def download_library(
                 item_id,
                 logger,
                 expected_size=expected_size,
+                relative_path=relative_path,
             ): name
-            for name, file_ref, item_id, expected_size in files_to_download
+            for name, file_ref, item_id, expected_size, relative_path in files_to_download
         }
         for future in as_completed(futures):
             results.append(future.result())
