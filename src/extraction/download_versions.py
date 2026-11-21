@@ -5,6 +5,9 @@ Download past version binaries listed in .versions.json files:
     Documents/Rapport.docx.history/2.0.docx
 The current version comes from download_files.py.
 
+Each version is read from its _vti_history URL. SharePoint 2019 answers 404
+there for pages (.aspx), so on a 404 the version is read through the REST API.
+
 Written files must match the version Size exactly, else they are deleted
 and counted as errors. Files already at the right size are skipped.
 
@@ -19,6 +22,7 @@ import os
 import sys
 from urllib.parse import quote
 
+import requests
 from office365.runtime.http.request_options import RequestOptions
 
 from sharepoint_client import get_config, build_context
@@ -33,12 +37,27 @@ def _history_path(versions_path, label):
     return os.path.join(base + ".history", f"{label}{ext}")
 
 
-def _download_version(ctx, site_url, rel_url, local_path, expected_size):
-    """Stream one _vti_history URL to local_path. Returns the written size."""
-    url = site_url.rstrip("/") + "/" + quote(rel_url)
+def _open_stream(ctx, url):
+    """Stream a GET of url. An HTTP error status raises requests.HTTPError."""
     opts = RequestOptions(url)
     opts.stream = True
-    response = ctx.pending_request().execute_request_direct(opts)
+    return ctx.pending_request().execute_request_direct(opts)
+
+
+def _download_version(ctx, site_url, file_ref, rel_url, local_path, expected_size):
+    """Stream one past version to local_path. Returns the written size.
+
+    rel_url is the version's _vti_history/<id>/<path> URL.
+    """
+    try:
+        response = _open_stream(ctx, site_url.rstrip("/") + "/" + quote(rel_url))
+    except requests.exceptions.HTTPError as e:
+        if getattr(e.response, "status_code", None) != 404:
+            raise
+        # Pages (.aspx): the REST API serves the version that _vti_history refuses.
+        versions = ctx.web.get_file_by_server_relative_url(file_ref).versions
+        version = versions.get_by_id(int(rel_url.split("/")[1]))
+        response = _open_stream(ctx, version.resource_url + "/$value")
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
     try:
         with open(local_path, "wb") as f:
@@ -78,7 +97,9 @@ def download_site_versions(site_dir, username, password, ca_bundle_path, logger)
                 counts["skipped_already_done"] += 1
                 continue
             try:
-                size = _download_version(ctx, site_url, h["url"], local_path, h["size"])
+                size = _download_version(
+                    ctx, site_url, data["file_ref"], h["url"], local_path, h["size"]
+                )
             except Exception as e:
                 counts["errors"] += 1
                 errors.append(
