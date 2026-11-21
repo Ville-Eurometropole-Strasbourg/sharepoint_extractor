@@ -76,10 +76,11 @@ def main():
     inventory["pages"] = []
     for lib in page_libs:
         try:
+            # Every page, through server-driven paging: a single .top(N) read
+            # silently stopped at N pages.
             items = (
                 lib.items.select(["*", "FileLeafRef", "FileRef"])
-                .top(500)
-                .get()
+                .get_all(page_size=100)
                 .execute_query()
             )
         except Exception as e:
