@@ -196,11 +196,10 @@ def discovered(path, title=None, status="ok"):
 
 
 class BuildSitesFromDiscoveryTest(unittest.TestCase):
-    def test_path_root_is_skipped_and_paths_stay_server_relative(self):
+    def test_path_root_is_kept_and_paths_stay_server_relative(self):
         sites = em.build_sites_from_discovery(
             [
                 discovered("/sites/hr", "Root"),
-                discovered("/sites/HR/"),
                 discovered("/sites/hr/team", "Team"),
                 discovered("/sites/hr/broken", status="error"),
             ],
@@ -208,14 +207,50 @@ class BuildSitesFromDiscoveryTest(unittest.TestCase):
         )
         self.assertEqual(
             sites,
-            [{"slug": "team", "url_suffix": "/sites/hr/team", "label": "Team"}],
+            [
+                {"slug": "_root", "url_suffix": "/sites/hr", "label": "Root"},
+                {"slug": "team", "url_suffix": "/sites/hr/team", "label": "Team"},
+            ],
         )
 
-    def test_host_root_is_skipped(self):
+    def test_host_root_is_kept_in_a_non_empty_folder(self):
         sites = em.build_sites_from_discovery(
             [discovered("/"), discovered("/service/team")], HOST_ROOT
         )
-        self.assertEqual([s["url_suffix"] for s in sites], ["/service/team"])
+        self.assertEqual(
+            [(s["slug"], s["url_suffix"]) for s in sites],
+            [("_root", "/"), ("team", "/service/team")],
+        )
+
+    def test_root_is_matched_ignoring_case_and_trailing_slash(self):
+        sites = em.build_sites_from_discovery([discovered("/Sites/HR/")], PATH_ROOT)
+        self.assertEqual([s["slug"] for s in sites], ["_root"])
+
+    def test_a_subsite_named_like_the_root_keeps_its_folder(self):
+        # The root does not take its last segment, so /sites/hr/x/hr stays "hr".
+        sites = em.build_sites_from_discovery(
+            [discovered("/sites/hr"), discovered("/sites/hr/x/hr")], PATH_ROOT
+        )
+        self.assertEqual([s["slug"] for s in sites], ["_root", "hr"])
+
+    def test_a_subsite_named_root_folder_uses_its_full_path(self):
+        sites = em.build_sites_from_discovery(
+            [discovered("/"), discovered("/service/_root")], HOST_ROOT
+        )
+        self.assertEqual([s["slug"] for s in sites], ["_root", "service-_root"])
+
+
+class SiteSlugTest(unittest.TestCase):
+    def test_root_site(self):
+        self.assertEqual(em.site_slug("/", HOST_ROOT), "_root")
+        self.assertEqual(em.site_slug("/sites/hr", PATH_ROOT), "_root")
+        self.assertEqual(
+            em.site_slug("/sites/hr/SitePages/Home.aspx", PATH_ROOT), "_root"
+        )
+
+    def test_other_sites(self):
+        self.assertEqual(em.site_slug("/sites/hr/team", PATH_ROOT), "team")
+        self.assertEqual(em.site_slug("/sites/hr", HOST_ROOT), "hr")
 
 
 if __name__ == "__main__":

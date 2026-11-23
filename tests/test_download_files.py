@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -123,6 +124,43 @@ class DownloadLibraryTest(unittest.TestCase):
         self.assertEqual(self.files_on_disk(), ["report.docx"])
         self.assertEqual([r["status"] for r in results], ["ok"])
         self.logger.warning.assert_called()
+
+
+class DiscoverAllDownloadableFilesTest(unittest.TestCase):
+    """--site and --all: the files of every extracted site, from its folder."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.extraction_dir = tmp.name
+        self.logger = mock.Mock()
+
+    def extracted_site(self, slug, url, file_ref):
+        site_dir = os.path.join(self.extraction_dir, "intranet", slug)
+        lib_dir = os.path.join(site_dir, "documents", "Documents")
+        os.makedirs(lib_dir)
+        with open(os.path.join(site_dir, "site_metadata.json"), "w") as f:
+            json.dump({"Url": url}, f)
+        name = file_ref.rsplit("/", 1)[1]
+        with open(os.path.join(lib_dir, name + ".meta.json"), "w") as f:
+            json.dump({"FileLeafRef": name, "FileRef": file_ref, "Id": 1}, f)
+
+    def test_the_files_of_a_host_root_site_are_found(self):
+        # A host root's Url has no path: https://intranet.example.org
+        self.extracted_site(
+            "_root", "https://intranet.example.org", "/Documents/a.docx"
+        )
+        self.extracted_site(
+            "team", "https://intranet.example.org/team", "/team/Documents/b.docx"
+        )
+
+        tasks = df.discover_all_downloadable_files(self.extraction_dir, self.logger)
+
+        self.assertEqual(
+            [(t["site_slug"], t["server_relative_url"], t["name"]) for t in tasks],
+            [("_root", "/", "a.docx"), ("team", "/team", "b.docx")],
+        )
+        self.logger.warning.assert_not_called()
 
 
 if __name__ == "__main__":
