@@ -159,6 +159,7 @@ Entry point: `src/main.py`, the interactive menu started by default in the conta
 
 - `extract_versions.py` writes `<file>.versions.json` for each file that can have a history: the current version, then each past one (label, size, date, author, comment, URL). `0.1` drafts are skipped, and so are `1.0` files in a library without minor versions. With minor versions, `1.0` is usually published from drafts `0.1`, `0.2`…, so these files are queried; the setting is read once per library.
 - `download_versions.py <site>` downloads past versions to `<file>.history/<label><ext>`. A file whose size differs from the server's is deleted and counted as an error.
+- Each version is read from its `_vti_history` URL. SharePoint 2019 answers 404 there for pages (`.aspx`), so on a 404 the version is read through the REST API (`versions/getById(<id>)/$value`).
 
 Known limits:
 
