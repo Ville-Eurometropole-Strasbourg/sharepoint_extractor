@@ -94,7 +94,7 @@ Commands run in the container, from the project root: `docker compose run --rm s
 
 - Step 1 lists the root's site collections through `SiteData.asmx` (for a root at `/`, every collection on its host; for `/sites/hr`, only those under that path), then crawls the subsites of each.
 - Paths use the default `SPX_OUTPUT_DIR` (`discovery_output`).
-- `<site>` is the site's folder name under `discovery_output/extraction/<root>/`: the last segment of its URL, or the whole path joined with `-` when several sites of the root share that segment.
+- `<site>` is the site's folder name under `discovery_output/extraction/<root>/`: `_root` for the root site itself (`SPX_SITE_URL`), else the last segment of its URL, or the whole path joined with `-` when several sites of the root share that segment.
 - A single site can be extracted with `extract_metadata.py /sites/hr/team`. Its result is merged into the root's `run_summary.json`.
 - `extract_metadata.py --permissions-all` (menu: Permissions catch-up) re-extracts the permissions of every site already extracted without error.
 - `download_files.py` also works per site (`--site <site>`) or per library (`<site path> <library title>`), with `--workers N` (default 6) and `--limit N`.

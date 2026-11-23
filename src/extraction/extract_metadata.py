@@ -637,6 +637,12 @@ def _read_last_extracted(output_dir, kind, title):
     return state.get("last_item_modified_date")
 
 
+# Folder of the root site (SPX_SITE_URL) under extraction/<root>/. Not its
+# last segment: a host root (/) has none, and a path root (/sites/hr) would
+# share it with a subsite of the same name.
+ROOT_SITE_SLUG = "_root"
+
+
 def strip_page_suffix(url_suffix):
     """Strip a trailing /SitePages/*.aspx: some entries point at a page, not the site root."""
     return re.sub(r"(?i)/sitepages/[^/]+\.aspx$", "", url_suffix.rstrip("/")) or "/"
@@ -662,19 +668,35 @@ def relative_path_in_library(file_ref, library_root):
     return "/".join(parts) or None
 
 
-def assign_unique_slugs(sites):
+def is_root_site(url_suffix, site_base_url):
+    """Whether url_suffix is the root (SPX_SITE_URL) itself. Case-insensitive."""
+    return strip_page_suffix(url_suffix).lower() == root_path(site_base_url).lower()
+
+
+def site_slug(url_suffix, site_base_url):
+    """Folder name of a site: ROOT_SITE_SLUG for the root, else its last segment."""
+    if is_root_site(url_suffix, site_base_url):
+        return ROOT_SITE_SLUG
+    return slug_from_path(url_suffix)
+
+
+def assign_unique_slugs(sites, site_base_url):
     """
-    Slug = last path segment, or the full path when several sites share it
-    (/finances/Actualites -> finances-actualites). Case-insensitive.
+    Slug = ROOT_SITE_SLUG for the root, else the last path segment, or the
+    full path when several sites share it (/finances/Actualites ->
+    finances-actualites) or when it is ROOT_SITE_SLUG. Case-insensitive.
     """
     paths_by_slug = {}
     for site in sites:
-        paths_by_slug.setdefault(slug_from_path(site["url_suffix"]), set()).add(
-            site["url_suffix"].lower()
-        )
+        paths_by_slug.setdefault(
+            site_slug(site["url_suffix"], site_base_url), set()
+        ).add(site["url_suffix"].lower())
     for site in sites:
-        slug = slug_from_path(site["url_suffix"])
-        if len(paths_by_slug[slug]) > 1:
+        slug = site_slug(site["url_suffix"], site_base_url)
+        if is_root_site(site["url_suffix"], site_base_url):
+            site["slug"] = slug
+            continue
+        if len(paths_by_slug[slug]) > 1 or slug == ROOT_SITE_SLUG:
             slug = (
                 strip_page_suffix(site["url_suffix"])
                 .strip("/")
@@ -879,17 +901,14 @@ def run_permissions_pass(
 def build_sites_from_discovery(discovered_sites, site_base_url):
     """
     discover_sites.py output -> [{"slug", "url_suffix", "label"}].
-    Skips failed entries and the root itself.
+    Skips failed entries. The root itself is kept, in ROOT_SITE_SLUG.
     """
     sites = []
     for entry in discovered_sites:
         if entry.get("status") != "ok":
             continue
         path = entry.get("server_relative_url")
-        if (
-            not path
-            or (path.rstrip("/") or "/").lower() == root_path(site_base_url).lower()
-        ):
+        if not path:
             continue
         path = strip_page_suffix(path)
         sites.append(
@@ -899,7 +918,7 @@ def build_sites_from_discovery(discovered_sites, site_base_url):
                 "label": entry.get("title") or path,
             }
         )
-    return assign_unique_slugs(sites)
+    return assign_unique_slugs(sites, site_base_url)
 
 
 def main():
@@ -1030,7 +1049,9 @@ def main():
         "label": url_suffix,
     }
     # Keep only the requested site, with its root-wide unique slug.
-    site = assign_unique_slugs(_known_sites(root_name, site_base_url) + [site])[-1]
+    site = assign_unique_slugs(
+        _known_sites(root_name, site_base_url) + [site], site_base_url
+    )[-1]
     site_url = absolute_url(site_base_url, site["url_suffix"])
     logger.info(f"=== {site['label']} ===")
     summary = extract_site(

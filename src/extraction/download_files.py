@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from sharepoint_client import get_config, build_context
 from site_urls import absolute_url, get_root_name
 from persistent_session import enable_persistent_session
-from extract_metadata import relative_path_in_library
+from extract_metadata import relative_path_in_library, site_slug
 
 ITEM_SELECT_FIELDS = [
     "FileLeafRef",
@@ -37,11 +37,6 @@ MAX_WORKER_COUNT = 8
 PART_SUFFIX = ".spx-part"
 SIZE_TOLERANCE_BYTES = 1
 _thread_local = threading.local()
-
-
-def slug_from_path(url_suffix):
-    """/sites/hr/team -> team."""
-    return url_suffix.strip("/").split("/")[-1].lower()
 
 
 def _parse_size(value):
@@ -604,9 +599,9 @@ def main():
         "extraction",
         root_name,
     )
-    # Reuse extract_metadata.py's folder; last path segment if not extracted.
+    # Reuse extract_metadata.py's folder; if not extracted, the name it would get.
     site_dir = _find_site_dir(output_dir, url_suffix) or os.path.join(
-        output_dir, slug_from_path(url_suffix)
+        output_dir, site_slug(url_suffix, site_base_url)
     )
     lib_dir = os.path.join(site_dir, "documents", library_title)
 
