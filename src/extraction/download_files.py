@@ -240,14 +240,20 @@ def download_library(
 
 
 def _site_relative_url(site_dir):
-    """Site's server-relative URL from its site_metadata.json, or None."""
+    """
+    Site's server-relative URL from its site_metadata.json, or None.
+    A host root's Url has no path (https://host): its URL is "/".
+    """
     try:
         with open(
             os.path.join(site_dir, "site_metadata.json"), "r", encoding="utf-8"
         ) as f:
-            return urlparse(json.load(f)["Url"]).path or None
+            url = json.load(f)["Url"]
     except (FileNotFoundError, KeyError, json.JSONDecodeError):
         return None
+    if not url:
+        return None
+    return urlparse(url).path or "/"
 
 
 def _find_site_dir(root_dir, url_suffix):
