@@ -67,7 +67,8 @@ def list_skip_reason(props):
 
 
 # OData__UIVersionString = _UIVersionString (current version label). Anything
-# above "1.0" means the file has a /versions history.
+# above "1.0", or "1.0" in a library with minor versions, may have a /versions
+# history.
 ITEM_SELECT_FIELDS_BASE = [
     "FileLeafRef",
     "FileRef",
