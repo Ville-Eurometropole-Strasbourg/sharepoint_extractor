@@ -6,7 +6,7 @@ It extracts, site by site:
 
 - document libraries: one `.meta.json` per file and per folder (document sets included), then the binaries;
 - the version history of each file, with the binaries of past versions;
-- generic lists: items, schema, and item attachments;
+- generic lists: items, schema, item attachments, and the version history of each item;
 - permissions of each site, of lists with broken inheritance, and of folders, files and list items with their own permissions;
 - wiki and publishing pages (inventory, body, page history);
 - the user table of each site collection.
@@ -19,7 +19,7 @@ Nothing is transformed: files (OneNote notebooks included) are copied as they ar
 - NTLM authentication through `office365-rest-python-client` 2.6.2 and `requests_ntlm`. Version 3.0.0 of the client no longer supports NTLM.
 - Classic SharePoint REST API (`_api/...`), not Microsoft Graph.
 - All calls go through one persistent HTTP session with adaptive throttling: a base delay of 0.3 s between calls, doubled when the server is under strain (up to 5 s), then eased back.
-- Every step can resume. Lists and libraries unchanged since the last success are skipped (`LastItemModifiedDate`), unless their `.state.json` predates the current format; file versions are resumed per file. A single-site run is merged into the root's `run_summary.json`; `--all-from-discovery` rewrites it at the end of the run.
+- Every step can resume. Lists and libraries unchanged since the last success are skipped (`LastItemModifiedDate`), unless their `.state.json` predates the current format; file and list item versions are resumed per file and per item. A single-site run is merged into the root's `run_summary.json`; `--all-from-discovery` rewrites it at the end of the run.
 - Downloads use several threads. Each file is written to `<file>.spx-part`, then renamed, so a file under its final name is always complete.
 - Every HTTP call is logged to SQLite (`<SPX_OUTPUT_DIR>/monitoring.sqlite3`), which the bundled Grafana can read.
 
@@ -85,10 +85,11 @@ For each root, in this order:
 | 2. Metadata and permissions | Metadata and permissions extraction > All sites | `python src/extraction/extract_metadata.py --all-from-discovery discovery_output/sites_index_<root>.json` |
 | 3. List attachments | List attachments extraction | `python src/extraction/extract_list_attachments.py --all` |
 | 4. Version history | Version history extraction | `python src/extraction/extract_versions.py --all` |
-| 5. Check errors | Consolidate errors | `python src/extraction/consolidate_errors.py` |
-| 6. Download files | File download | `python src/extraction/download_files.py --all [limit]` |
-| 7. Download past versions | (command line only) | `python src/extraction/download_versions.py <site>` |
-| 8. Statistics | Statistics | `python src/extraction/aggregate_stats.py --output stats_summary.json` |
+| 5. List item history | List item history extraction | `python src/extraction/extract_list_versions.py --all` |
+| 6. Check errors | Consolidate errors | `python src/extraction/consolidate_errors.py` |
+| 7. Download files | File download | `python src/extraction/download_files.py --all [limit]` |
+| 8. Download past versions | (command line only) | `python src/extraction/download_versions.py <site>` |
+| 9. Statistics | Statistics | `python src/extraction/aggregate_stats.py --output stats_summary.json` |
 
 Commands run in the container, from the project root: `docker compose run --rm spx-extractor python ...`.
 
@@ -108,7 +109,8 @@ discovery_output/
 ├── sites_index_<root>.json, sites_tree_<root>.json, discovery_errors_<root>.json
 └── extraction/<root>/
     ├── run_summary.json, permissions_run_summary.json,
-    │   versions_run_summary.json, attachments_run_summary.json
+    │   versions_run_summary.json, attachments_run_summary.json,
+    │   list_versions_run_summary.json
     └── <site>/
         ├── site_metadata.json
         ├── permissions.json                        site permissions, lists and items with broken inheritance
@@ -122,6 +124,7 @@ discovery_output/
         │       <folders>/<file>.history/<version><ext>
         ├── lists/<list>/
         │   ├── items.json, _schema_columns.json, .state.json
+        │   ├── items_versions.json                 item history, + .versions_state.json
         │   └── attachments/<item id>/<file>        attachment + <file>.meta.json
         └── pages/                                  page inventory, bodies and history
 ```
@@ -140,6 +143,7 @@ Entry point: `src/main.py`, the interactive menu started by default in the conta
 | `extraction/` | `extract_metadata.py` | Schemas, file metadata, list items and permissions |
 | | `extract_list_attachments.py` | Metadata of list item attachments |
 | | `extract_versions.py` | `<file>.versions.json` for each versioned file |
+| | `extract_list_versions.py` | `items_versions.json` for each list whose items have a history |
 | | `download_files.py` | Binaries of files and attachments |
 | | `download_versions.py` | Binaries of past versions, size checked to the byte |
 | | `enrich_file_meta.py` | Adds created / modified dates and authors to a site's `.meta.json` |
@@ -161,6 +165,7 @@ Entry point: `src/main.py`, the interactive menu started by default in the conta
 ## Version history
 
 - `extract_versions.py` writes `<file>.versions.json` for each file that can have a history: the current version, then each past one (label, size, date, author, comment, URL). `0.1` drafts are skipped, and so are `1.0` files in a library without minor versions. With minor versions, `1.0` is usually published from drafts `0.1`, `0.2`…, so these files are queried; the setting is read once per library.
+- `extract_list_versions.py` writes `lists/<list>/items_versions.json`: for each item that can have a history, its current label and every version, the current one included, with the field values SharePoint returns for it (system fields included, names as the `/versions` endpoint spells them). Labels are read in every list, versioned or not, as a list whose versioning was turned off keeps its past versions: one paged read per non-empty list, then one call per item, with the same `0.1` / `1.0` rule as files. `--dry-run` reads the labels only and counts the items that would be queried. Unchanged lists are skipped (`.versions_state.json`), and items whose label is the one saved are not read again.
 - `download_versions.py <site>` downloads past versions to `<file>.history/<label><ext>`. A file whose size differs from the server's is deleted and counted as an error.
 - Each version is read from its `_vti_history` URL. SharePoint 2019 answers 404 there for pages (`.aspx`), so on a 404 the version is read through the REST API (`versions/getById(<id>)/$value`).
 

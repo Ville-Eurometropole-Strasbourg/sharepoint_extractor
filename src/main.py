@@ -185,6 +185,44 @@ def handle_list_attachments():
             print("Cancelled.")
 
 
+def handle_list_versions():
+    root_url = os.environ.get("SPX_SITE_URL", "")
+    root_name = os.environ.get(ROOT_NAME_ENV, "")
+    scope = ask_choice(
+        f"List item history (active root: {root_url}): which scope?",
+        [
+            ("site", "One site (already extracted)"),
+            ("all", "All sites already extracted from this root"),
+            ("count", "All sites, count the items to query only (--dry-run)"),
+            ("cancel", "Cancel"),
+        ],
+    )
+    if scope == "cancel":
+        return
+    script = os.path.join(EXTRACTION_DIR, "extract_list_versions.py")
+    if scope == "site":
+        site_slug = input(
+            f"Site id (folder under discovery_output/extraction/{root_name}/): "
+        ).strip()
+        run_script(script, [site_slug])
+    elif scope == "count":
+        run_script(script, ["--all", "--dry-run"])
+    else:
+        confirm = (
+            input(
+                f"\nThis will query the history of every list item with past "
+                f"versions on every site already extracted from {root_name}: "
+                f"one call per item (resumable). Continue? [y/N] "
+            )
+            .strip()
+            .lower()
+        )
+        if confirm == "y":
+            run_script(script, ["--all"])
+        else:
+            print("Cancelled.")
+
+
 def handle_download():
     scope = ask_choice(
         "File download: which scope?",
@@ -295,6 +333,10 @@ def main():
                     "versions",
                     "Version history extraction (sites already extracted)",
                 ),
+                (
+                    "list_versions",
+                    "List item history extraction (sites already extracted)",
+                ),
                 ("errors", "Consolidate errors (every run_summary.json)"),
                 ("download", "File download"),
                 ("stats", "Statistics (stats_summary.json)"),
@@ -315,6 +357,8 @@ def main():
             handle_metadata_extraction()
         elif step == "versions":
             handle_versions_extraction()
+        elif step == "list_versions":
+            handle_list_versions()
         elif step == "attachments":
             handle_list_attachments()
         elif step == "permissions":
