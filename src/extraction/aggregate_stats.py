@@ -53,12 +53,18 @@ def classify_extension(filename):
     return "other"
 
 
-def read_file_size(meta_path):
-    """(size_in_bytes, version_label) from a .meta.json, None when unknown."""
+def read_meta(meta_path):
+    """A .meta.json's content, None when unreadable."""
     try:
         with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
+            return json.load(f)
     except (OSError, json.JSONDecodeError):
+        return None
+
+
+def read_file_size(meta):
+    """(size_in_bytes, version_label) from a .meta.json's content, None when unknown."""
+    if meta is None:
         return None, None
 
     label = meta.get("OData__UIVersionString")
@@ -191,10 +197,13 @@ def scan_extraction_dir(extraction_dir):
                 for fname in filenames:
                     if not fname.endswith(".meta.json"):
                         continue
+                    meta_path = os.path.join(dirpath, fname)
+                    meta = read_meta(meta_path)
+                    if meta is not None and meta.get("FileSystemObjectType") == 1:
+                        continue  # folder or document set
                     real_name = fname[: -len(".meta.json")]
                     group = classify_extension(real_name)
-                    meta_path = os.path.join(dirpath, fname)
-                    size_bytes, version_label = read_file_size(meta_path)
+                    size_bytes, version_label = read_file_size(meta)
                     history = read_history(meta_path, version_label)
                     accumulate(site_counters, group, size_bytes, history)
 

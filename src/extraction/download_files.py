@@ -332,6 +332,10 @@ def discover_all_downloadable_files(
                             os.path.join(dirpath, fname), "r", encoding="utf-8"
                         ) as f:
                             meta = json.load(f)
+                        # A folder's .meta.json sits next to its directory:
+                        # nothing to download.
+                        if meta.get("FileSystemObjectType") == 1:
+                            continue
                         tasks.append(
                             {
                                 "kind": kind,

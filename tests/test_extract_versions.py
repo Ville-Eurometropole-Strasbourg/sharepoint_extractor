@@ -154,6 +154,31 @@ class ExtractSiteVersionsTest(unittest.TestCase):
         self.assertIn("'Plain'", warned)
         self.assertEqual(counts["skipped_no_history"], 1)
 
+    def test_folders_and_document_sets_are_skipped(self):
+        for relative, label in (("Sets/Lot 1", "1.0"), ("Plain/archive", "2.0")):
+            _write_json(
+                self.site_dir / "documents" / (relative + ".meta.json"),
+                {
+                    "FileRef": "/team/" + relative,
+                    "FileSystemObjectType": 1,
+                    "OData__UIVersionString": label,
+                },
+            )
+
+        def minor_versions(ctx, file_ref):
+            return self.minor_versions[file_ref.split("/")[2]]
+
+        counts, fetch, lookup, _ = self.run_extraction(minor_versions)
+
+        self.assertNotIn("/team/Sets/Lot 1", self.queried(fetch))
+        self.assertNotIn("/team/Plain/archive", self.queried(fetch))
+        self.assertEqual(self.looked_up(lookup), ["Drafts", "Plain"])
+        self.assertEqual(counts["skipped_folders"], 2)
+        self.assertEqual(counts["queried"], 4)
+        self.assertFalse(
+            (self.site_dir / "documents" / "Sets" / "Lot 1.versions.json").exists()
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

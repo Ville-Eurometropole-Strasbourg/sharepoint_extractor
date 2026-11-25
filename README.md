@@ -4,7 +4,7 @@ Raw, exhaustive extraction of an on-premises SharePoint farm (built and used on 
 
 It extracts, site by site:
 
-- document libraries: one `.meta.json` per file, then the binaries;
+- document libraries: one `.meta.json` per file and per folder (document sets included), then the binaries;
 - the version history of each file, with the binaries of past versions;
 - generic lists: items, schema, and item attachments;
 - permissions of each site, of lists with broken inheritance, and of folders, files and list items with their own permissions;
@@ -19,7 +19,7 @@ Nothing is transformed: files (OneNote notebooks included) are copied as they ar
 - NTLM authentication through `office365-rest-python-client` 2.6.2 and `requests_ntlm`. Version 3.0.0 of the client no longer supports NTLM.
 - Classic SharePoint REST API (`_api/...`), not Microsoft Graph.
 - All calls go through one persistent HTTP session with adaptive throttling: a base delay of 0.3 s between calls, doubled when the server is under strain (up to 5 s), then eased back.
-- Every step can resume. Lists and libraries unchanged since the last success are skipped (`LastItemModifiedDate`), file versions are resumed per file. A single-site run is merged into the root's `run_summary.json`; `--all-from-discovery` rewrites it at the end of the run.
+- Every step can resume. Lists and libraries unchanged since the last success are skipped (`LastItemModifiedDate`), unless their `.state.json` predates the current format; file versions are resumed per file. A single-site run is merged into the root's `run_summary.json`; `--all-from-discovery` rewrites it at the end of the run.
 - Downloads use several threads. Each file is written to `<file>.spx-part`, then renamed, so a file under its final name is always complete.
 - Every HTTP call is logged to SQLite (`<SPX_OUTPUT_DIR>/monitoring.sqlite3`), which the bundled Grafana can read.
 
@@ -114,6 +114,8 @@ discovery_output/
         ├── permissions.json                        site permissions, lists and items with broken inheritance
         ├── documents/<library>/
         │   ├── _schema_columns.json, .state.json
+        │   ├── <folders>/<folder>/                 created even when empty
+        │   ├── <folders>/<folder>.meta.json        folder or document set metadata
         │   └── <folders>/<file>                    binary
         │       <folders>/<file>.meta.json          metadata
         │       <folders>/<file>.versions.json      version history
