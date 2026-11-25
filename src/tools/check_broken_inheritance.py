@@ -2,14 +2,22 @@
 
 Expected layout:
     {
+      "format": 2,
       "site_has_unique_role_assignments": bool,
       "site_permissions": [principal, ...],
-      "lists_with_broken_inheritance": {"<list title>": [principal, ...]}
+      "lists_with_broken_inheritance": {"<list title>": [principal, ...]},
+      "items_with_broken_inheritance": {
+        "<list title>": [{id, kind, url, permissions: [principal, ...]}]
+      },
+      "items_scan_errors": [{list, item_id, error}]
     }
     principal = {login_name, title, type, roles, members_resolvable, members?}
+    kind = folder, file or item
 
 A list appears in lists_with_broken_inheritance only if its inheritance is
-broken, so the total number of lists is not known from this file.
+broken, so the total number of lists is not known from this file. Files
+without "format" predate item permissions: extract_metadata.py
+--permissions-all redoes them.
 Site-level counts are split into top-level sites and sub-sites (parent found
 through site_metadata.json). Only names and counts are printed.
 
@@ -74,6 +82,11 @@ def main():
     broken_titles = Counter()
     principal_types = Counter()
     principals_total = principals_unresolvable = 0
+    item_kinds = Counter()
+    item_principals = 0
+    without_items = []
+    sites_with_scan_errors = 0
+    scan_errors_total = 0
 
     for slug in sorted(os.listdir(root_dir)):
         path = os.path.join(root_dir, slug, "permissions.json")
@@ -93,6 +106,17 @@ def main():
                 principal_types[str(p.get("type"))] += 1
                 if p.get("members_resolvable") is False:
                     principals_unresolvable += 1
+        items_by_list = data.get("items_with_broken_inheritance")
+        if items_by_list is None:
+            without_items.append(slug)
+            items_by_list = {}
+        site_items = [i for items in items_by_list.values() for i in items]
+        for item in site_items:
+            item_kinds[str(item.get("kind"))] += 1
+            item_principals += len(item.get("permissions") or [])
+        scan_errors = len(data.get("items_scan_errors") or [])
+        scan_errors_total += scan_errors
+        sites_with_scan_errors += scan_errors > 0
         url = urls.get(slug)
         kind = (
             "unknown" if url is None else ("sub" if has_parent(url, url_set) else "top")
@@ -103,6 +127,8 @@ def main():
                 kind,
                 bool(data.get("site_has_unique_role_assignments")),
                 len(broken),
+                "" if slug in without_items else len(site_items),
+                "" if slug in without_items else scan_errors,
             )
         )
 
@@ -135,10 +161,41 @@ def main():
         print(f"  type={t}: {c}")
     print(f"entries with members_resolvable = false: {principals_unresolvable}")
 
+    print(
+        f"permissions.json without item permissions (older format): "
+        f"{len(without_items)}"
+    )
+    if without_items:
+        print("  run extract_metadata.py --permissions-all to complete them")
+    sites_with_items = sum(1 for r in rows if r[4] not in ("", 0))
+    print(f"sites with at least one item with broken inheritance: {sites_with_items}")
+    print(
+        f"items with broken inheritance (total): {sum(item_kinds.values())}"
+        + (
+            " (" + ", ".join(f"{k}={c}" for k, c in sorted(item_kinds.items())) + ")"
+            if item_kinds
+            else ""
+        )
+    )
+    print(f"principal entries on items: {item_principals}")
+    print(
+        f"item scan errors: {scan_errors_total} "
+        f"(sites with at least one: {sites_with_scan_errors})"
+    )
+
     if args.csv:
         with open(args.csv, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["slug", "level", "site_unique", "lists_broken"])
+            writer.writerow(
+                [
+                    "slug",
+                    "level",
+                    "site_unique",
+                    "lists_broken",
+                    "items_broken",
+                    "items_scan_errors",
+                ]
+            )
             writer.writerows(rows)
         print(f"csv written: {args.csv}")
 

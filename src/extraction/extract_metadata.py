@@ -53,6 +53,25 @@ KEEP_DESPITE_HIDDEN_TEMPLATES = {
 
 LIST_FILTER_FIELDS = ["Title", "Hidden", "BaseTemplate", "EntityTypeName"]
 
+# permissions.json format. 2 adds items_with_broken_inheritance and
+# items_scan_errors; older files are redone by run_permissions_pass().
+PERMISSIONS_FORMAT = 2
+PERMISSION_LIST_FIELDS = LIST_FILTER_FIELDS + [
+    "Id",
+    "BaseType",
+    "ItemCount",
+    "HasUniqueRoleAssignments",
+]
+# Items are only scanned for this flag: one paged read per list, and role
+# assignments are then read for the flagged items only.
+ITEM_PERMISSION_FIELDS = [
+    "Id",
+    "FileRef",
+    "FileSystemObjectType",
+    "HasUniqueRoleAssignments",
+]
+ITEM_PERMISSIONS_PAGE_SIZE = 1000
+
 
 def list_skip_reason(props):
     """None to extract the list, else "hidden" or "system_list"."""
@@ -64,6 +83,19 @@ def list_skip_reason(props):
     if props.get("EntityTypeName") in SKIP_LIST_ENTITY_NAMES:
         return "system_list"
     return None
+
+
+def reads_permissions(props):
+    """
+    Whether a list's permissions and those of its items are read: every list
+    but the hidden ones list_skip_reason() skips. System lists are kept, as
+    their content is skipped (or read elsewhere, like pages) but not their
+    permissions.
+    """
+    return not (
+        props.get("Hidden")
+        and props.get("BaseTemplate") not in KEEP_DESPITE_HIDDEN_TEMPLATES
+    )
 
 
 # OData__UIVersionString = _UIVersionString (current version label). Anything
@@ -743,8 +775,48 @@ def _describe_principal(principal):
     }
 
 
-def _role_assignments_to_dict(securable, ctx, logger):
-    """Role assignments of a site or list, with SharePoint group members expanded."""
+class GroupMembers:
+    """
+    Members of a site's SharePoint groups, read once per site: the same
+    groups come back on the site, its lists and its items. A failed read is
+    not kept, so the group is asked again where it next appears.
+    """
+
+    def __init__(self, ctx, logger):
+        self.ctx = ctx
+        self.logger = logger
+        self.by_id = {}
+        self.requests = 0
+        self.reused = 0
+
+    def get(self, principal):
+        """[{title, login_name}] of the group, or None if it cannot be read."""
+        if principal.id in self.by_id:
+            self.reused += 1
+            return list(self.by_id[principal.id])
+        self.requests += 1
+        try:
+            group = self.ctx.web.site_groups.get_by_id(principal.id)
+            members = group.users.get().execute_query()
+        except Exception as e:
+            self.logger.warning(f"    Failed to expand group '{principal.title}': {e}")
+            return None
+        self.by_id[principal.id] = [
+            {
+                "title": m.title,
+                "login_name": m.login_name or m.user_principal_name,
+            }
+            for m in members
+        ]
+        return list(self.by_id[principal.id])
+
+
+def _role_assignments_to_dict(securable, ctx, logger, group_members=None):
+    """
+    Role assignments of a site, list or item, with SharePoint group members
+    expanded. None if they cannot be read.
+    """
+    group_members = group_members or GroupMembers(ctx, logger)
     try:
         assignments = (
             securable.role_assignments.expand(["Member", "RoleDefinitionBindings"])
@@ -765,30 +837,88 @@ def _role_assignments_to_dict(securable, ctx, logger):
         entry["role_types"] = [r.properties.get("RoleTypeKind") for r in bindings]
 
         if principal.principal_type_name == "SharePointGroup":
-            try:
-                group = ctx.web.site_groups.get_by_id(principal.id)
-                members = group.users.get().execute_query()
-                entry["members"] = [
-                    {
-                        "title": m.title,
-                        "login_name": m.login_name or m.user_principal_name,
-                    }
-                    for m in members
-                ]
-            except Exception as e:
-                logger.warning(f"    Failed to expand group '{principal.title}': {e}")
-                entry["members"] = None
+            entry["members"] = group_members.get(principal)
 
         result.append(entry)
     return result
+
+
+def _item_kind(item_props, list_props):
+    """folder (document sets included), file (in a library) or item (in a list)."""
+    if item_props.get("FileSystemObjectType") == 1:
+        return "folder"
+    return "file" if list_props.get("BaseType") == 1 else "item"
+
+
+def items_with_unique_permissions(sp_list, list_props):
+    """
+    [(id, kind, FileRef)] of the items of sp_list with their own permissions,
+    from one paged read. Raises if the server does not return
+    HasUniqueRoleAssignments: an unanswered question is not a "no".
+    """
+    items = (
+        sp_list.items.select(ITEM_PERMISSION_FIELDS)
+        .get_all(page_size=ITEM_PERMISSIONS_PAGE_SIZE)
+        .execute_query()
+    )
+    result = []
+    for item in items:
+        props = item.properties
+        if "HasUniqueRoleAssignments" not in props:
+            raise ValueError(
+                f"HasUniqueRoleAssignments missing for item {props.get('Id')}"
+            )
+        if props["HasUniqueRoleAssignments"]:
+            result.append(
+                (props.get("Id"), _item_kind(props, list_props), props.get("FileRef"))
+            )
+    return result
+
+
+def _extract_item_permissions(ctx, lists, group_members, logger):
+    """
+    ({list title: [item]}, [error]) for the folders, files and items with
+    their own permissions, in the lists reads_permissions() keeps.
+    """
+    by_list, errors = {}, []
+    for sp_list in lists:
+        props = sp_list.properties
+        if not reads_permissions(props) or not props.get("ItemCount"):
+            continue
+        title = props.get("Title")
+        keyed_list = ctx.web.lists.get_by_id(props.get("Id"))
+        try:
+            flagged = items_with_unique_permissions(keyed_list, props)
+        except Exception as e:
+            logger.warning(f"    Failed to scan '{title}' for item permissions: {e}")
+            errors.append({"list": title, "item_id": None, "error": str(e)})
+            continue
+        for item_id, kind, url in flagged:
+            permissions = _role_assignments_to_dict(
+                keyed_list.items.get_by_id(item_id), ctx, logger, group_members
+            )
+            if permissions is None:
+                errors.append(
+                    {
+                        "list": title,
+                        "item_id": item_id,
+                        "error": "role assignments could not be read",
+                    }
+                )
+            by_list.setdefault(title, []).append(
+                {"id": item_id, "kind": kind, "url": url, "permissions": permissions}
+            )
+    return by_list, errors
 
 
 def extract_permissions(
     site_url, slug, username, password, ca_bundle_path, base_output_dir, logger
 ):
     """
-    Write permissions.json: site role assignments, plus those of lists with
-    broken inheritance.
+    Write permissions.json: site role assignments, those of lists with
+    broken inheritance, and those of folders, files and items with their own
+    permissions (items_with_broken_inheritance). What could not be read is
+    listed in items_scan_errors.
     """
     output_dir = os.path.join(base_output_dir, slug)
     os.makedirs(output_dir, exist_ok=True)
@@ -803,25 +933,28 @@ def extract_permissions(
         logger.error(f"    Failed to connect for permissions: {e}")
         return {"error": str(e)}
 
-    site_permissions = _role_assignments_to_dict(ctx.web, ctx, logger)
+    group_members = GroupMembers(ctx, logger)
+    site_permissions = _role_assignments_to_dict(ctx.web, ctx, logger, group_members)
     result = {
+        "format": PERMISSIONS_FORMAT,
         "site_has_unique_role_assignments": web.has_unique_role_assignments,
         "site_permissions": site_permissions,
         "lists_with_broken_inheritance": {},
+        "items_with_broken_inheritance": {},
+        "items_scan_errors": [],
     }
 
     try:
-        lists = (
-            ctx.web.lists.select(["Id", "Title", "Hidden", "HasUniqueRoleAssignments"])
-            .get()
-            .execute_query()
-        )
+        lists = ctx.web.lists.select(PERMISSION_LIST_FIELDS).get().execute_query()
     except Exception as e:
         logger.warning(f"    Failed to list lists/libraries for permissions: {e}")
+        result["items_scan_errors"].append(
+            {"list": None, "item_id": None, "error": str(e)}
+        )
         lists = []
 
     for sp_list in lists:
-        if sp_list.properties.get("Hidden"):
+        if not reads_permissions(sp_list.properties):
             continue
         if not sp_list.properties.get("HasUniqueRoleAssignments"):
             continue
@@ -835,8 +968,19 @@ def extract_permissions(
                 f"    Failed to re-fetch a list with broken inheritance: {e}"
             )
             continue
-        list_permissions = _role_assignments_to_dict(keyed_list, ctx, logger)
+        list_permissions = _role_assignments_to_dict(
+            keyed_list, ctx, logger, group_members
+        )
         result["lists_with_broken_inheritance"][keyed_list.title] = list_permissions
+
+    items, errors = _extract_item_permissions(ctx, lists, group_members, logger)
+    result["items_with_broken_inheritance"] = items
+    result["items_scan_errors"] += errors
+    logger.info(
+        f"    Items with their own permissions: {sum(len(v) for v in items.values())}, "
+        f"scan errors: {len(result['items_scan_errors'])}, group member reads: "
+        f"{group_members.requests} ({group_members.reused} reused)"
+    )
 
     with open(os.path.join(output_dir, "permissions.json"), "w", encoding="utf-8") as f:
         json.dump(result, f, ensure_ascii=False, indent=2, default=str)
@@ -844,14 +988,31 @@ def extract_permissions(
     return {
         "lists_with_broken_inheritance_count": len(
             result["lists_with_broken_inheritance"]
-        )
+        ),
+        "items_with_broken_inheritance_count": sum(len(v) for v in items.values()),
+        "items_scan_errors_count": len(result["items_scan_errors"]),
+        "group_members_requests": group_members.requests,
+        "group_members_reused": group_members.reused,
     }
+
+
+def permissions_up_to_date(permissions_path):
+    """Whether permissions.json exists in the current format (else it is redone)."""
+    try:
+        with open(permissions_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and data.get("format") == PERMISSIONS_FORMAT
 
 
 def run_permissions_pass(
     sites, username, password, ca_bundle_path, site_base_url, base_output_dir, logger
 ):
-    """Run extract_permissions() on each site lacking a permissions.json."""
+    """
+    Run extract_permissions() on each site without a permissions.json in the
+    current format: files written by an older version are redone.
+    """
     logger.info(f"--- Starting permissions pass on {len(sites)} site(s) ---")
     permissions_summaries = {}
     skipped_already_done = 0
@@ -859,7 +1020,7 @@ def run_permissions_pass(
         permissions_path = os.path.join(
             base_output_dir, site["slug"], "permissions.json"
         )
-        if os.path.exists(permissions_path):
+        if permissions_up_to_date(permissions_path):
             skipped_already_done += 1
             continue
         site_url = absolute_url(site_base_url, site["url_suffix"])
@@ -876,7 +1037,7 @@ def run_permissions_pass(
 
     if skipped_already_done:
         logger.info(
-            f"Skipped {skipped_already_done} site(s) with an existing permissions.json."
+            f"Skipped {skipped_already_done} site(s) with an up-to-date permissions.json."
         )
 
     permissions_summary_path = os.path.join(
