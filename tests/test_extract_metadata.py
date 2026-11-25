@@ -1,4 +1,6 @@
+import json
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -251,6 +253,146 @@ class SiteSlugTest(unittest.TestCase):
     def test_other_sites(self):
         self.assertEqual(em.site_slug("/sites/hr/team", PATH_ROOT), "team")
         self.assertEqual(em.site_slug("/sites/hr", HOST_ROOT), "hr")
+
+
+class _Query:
+    """A chainable client query whose execute_query() returns `result`."""
+
+    def __init__(self, result):
+        self.result, self.selected = result, None
+
+    def select(self, fields):
+        self.selected = list(fields)
+        return self
+
+    def get(self):
+        return self
+
+    def get_all(self, *args, **kwargs):
+        return self
+
+    def execute_query(self):
+        return self.result
+
+
+LIBRARY_ROOT = "/sites/team/Marches"
+FOLDER_CT = "0x0120002A"
+DOCUMENT_SET_CT = "0x0120D520001"
+FILE_CT = "0x0101001B"
+
+
+def _library_item(item_id, relative, content_type, folder=False):
+    return types.SimpleNamespace(
+        properties={
+            "Id": item_id,
+            "FileRef": f"{LIBRARY_ROOT}/{relative}",
+            "FileLeafRef": relative.rsplit("/", 1)[-1],
+            "FileSystemObjectType": 1 if folder else 0,
+            "ContentTypeId": content_type,
+            "Lot": "A",
+        }
+    )
+
+
+class FakeLibrary:
+    def __init__(self, items):
+        self.fields = _Query(
+            [
+                types.SimpleNamespace(
+                    properties={
+                        "Title": "Lot",
+                        "InternalName": "Lot",
+                        "TypeAsString": "Text",
+                        "Hidden": False,
+                    }
+                )
+            ]
+        )
+        self.items = _Query(items)
+        self.root_folder = _Query(
+            types.SimpleNamespace(properties={"ServerRelativeUrl": LIBRARY_ROOT})
+        )
+
+
+class DocumentLibraryFoldersTest(unittest.TestCase):
+    """Folders and document sets get a .meta.json next to their directory."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.output_dir = Path(tmp.name)
+        self.library = FakeLibrary(
+            [
+                _library_item(1, "2024", FOLDER_CT, folder=True),
+                _library_item(2, "2024/Lot 1", DOCUMENT_SET_CT, folder=True),
+                _library_item(3, "2024/Lot 1/offre.pdf", FILE_CT),
+                _library_item(4, "Vide", FOLDER_CT, folder=True),
+                _library_item(5, "note.docx", FILE_CT),
+            ]
+        )
+        self.result = em.extract_document_library(
+            self.library, "Marches", str(self.output_dir), mock.Mock()
+        )
+        self.lib_dir = self.output_dir / "documents" / "Marches"
+
+    def meta(self, relative):
+        path = self.lib_dir / (relative + ".meta.json")
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_every_folder_and_document_set_has_its_meta(self):
+        self.assertEqual(self.meta("2024")["ContentTypeId"], FOLDER_CT)
+        document_set = self.meta("2024/Lot 1")
+        self.assertEqual(document_set["ContentTypeId"], DOCUMENT_SET_CT)
+        self.assertEqual(document_set["Lot"], "A")
+        self.assertEqual(document_set["FileSystemObjectType"], 1)
+        self.assertEqual(document_set["_relative_path"], "2024/Lot 1")
+
+    def test_empty_folders_exist_on_disk(self):
+        self.assertTrue((self.lib_dir / "Vide").is_dir())
+        self.assertEqual(list((self.lib_dir / "Vide").iterdir()), [])
+
+    def test_files_are_written_as_before(self):
+        self.assertEqual(self.meta("2024/Lot 1/offre.pdf")["Id"], 3)
+        self.assertEqual(self.meta("note.docx")["Id"], 5)
+        self.assertEqual(self.result, {"files": 2, "folders": 3})
+
+    def test_the_content_type_is_read(self):
+        self.assertIn("ContentTypeId", self.library.items.selected)
+
+
+class LibraryStateFormatTest(unittest.TestCase):
+    """Libraries extracted before folders had a .meta.json are read again once."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.output_dir = tmp.name
+
+    def write_state(self, kind, state):
+        path = Path(em._state_path(self.output_dir, kind, "Docs"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state), encoding="utf-8")
+
+    def test_an_older_library_state_is_re_extracted(self):
+        self.write_state("library", {"last_item_modified_date": "2026-01-01"})
+        self.assertIsNone(em._read_last_extracted(self.output_dir, "library", "Docs"))
+
+    def test_a_current_library_state_is_skipped(self):
+        em._write_last_extracted(self.output_dir, "library", "Docs", "2026-01-01")
+        self.assertEqual(
+            em._read_last_extracted(self.output_dir, "library", "Docs"), "2026-01-01"
+        )
+
+    def test_list_states_keep_their_own_format(self):
+        self.write_state(
+            "list",
+            {"last_item_modified_date": "2026-01-01", "format": em.LIBRARY_FORMAT},
+        )
+        self.assertIsNone(em._read_last_extracted(self.output_dir, "list", "Docs"))
+        em._write_last_extracted(self.output_dir, "list", "Docs", "2026-01-01")
+        self.assertEqual(
+            em._read_last_extracted(self.output_dir, "list", "Docs"), "2026-01-01"
+        )
 
 
 if __name__ == "__main__":

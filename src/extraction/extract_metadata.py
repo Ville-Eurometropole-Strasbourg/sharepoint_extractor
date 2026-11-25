@@ -10,7 +10,7 @@ Notes:
 - Libraries vs lists are split on BaseType (1 = DocumentLibrary).
 - Each list gets a _schema_columns.json.
 - FileLeafRef/FileRef/FileSystemObjectType must be selected explicitly.
-- One .meta.json per file.
+- One .meta.json per file and per folder (next to its directory).
 - Hidden lists are skipped, except KEEP_DESPITE_HIDDEN_TEMPLATES.
 - System lists are matched on EntityTypeName and BaseTemplate, which do not
   depend on the site language (titles do).
@@ -28,6 +28,9 @@ from site_urls import absolute_url, get_root_name, root_path
 from persistent_session import enable_persistent_session
 
 GENERIC_LIST_FORMAT = 4
+# .state.json format of libraries. 2 adds the folders' .meta.json: older
+# states are re-extracted once.
+LIBRARY_FORMAT = 2
 PERSON_TYPES = {"User", "UserMulti"}
 PERSON_EXCLUDED = {"AppAuthor", "AppEditor", "MyAuthor", "MyEditor"}
 
@@ -100,7 +103,7 @@ def reads_permissions(props):
 
 # OData__UIVersionString = _UIVersionString (current version label). Anything
 # above "1.0", or "1.0" in a library with minor versions, may have a /versions
-# history.
+# history. ContentTypeId tells a document set (0x0120D520...) from a folder.
 ITEM_SELECT_FIELDS_BASE = [
     "FileLeafRef",
     "FileRef",
@@ -109,6 +112,7 @@ ITEM_SELECT_FIELDS_BASE = [
     "GUID",
     "FileSizeDisplay",
     "OData__UIVersionString",
+    "ContentTypeId",
 ]
 
 MANY_CUSTOM_COLUMNS_WARNING_THRESHOLD = 40
@@ -241,7 +245,11 @@ def _extract_bad_field_name(error_message):
 
 
 def extract_document_library(sp_list, title, output_dir, logger):
-    """Extract a library's schema and one .meta.json per file (no binaries)."""
+    """
+    Extract a library's schema and one .meta.json per file and per folder
+    (no binaries). A folder's .meta.json sits next to its directory, which
+    is created even when empty.
+    """
     lib_dir = os.path.join(output_dir, "documents", title.replace("/", "_"))
     os.makedirs(lib_dir, exist_ok=True)
 
@@ -350,16 +358,18 @@ def extract_document_library(sp_list, title, output_dir, logger):
 
         if is_folder:
             folder_count += 1
-            continue
-
-        file_count += 1
+        else:
+            file_count += 1
         relative = relative_path_in_library(props.get("FileRef"), library_root)
         if relative is None:
             relative = name.replace("/", "_")
             flat_fallback += 1
         props["_relative_path"] = relative
-        meta_path = os.path.join(lib_dir, *relative.split("/")) + ".meta.json"
-        os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+        item_path = os.path.join(lib_dir, *relative.split("/"))
+        meta_path = item_path + ".meta.json"
+        os.makedirs(
+            item_path if is_folder else os.path.dirname(meta_path), exist_ok=True
+        )
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(dict(props), f, ensure_ascii=False, indent=2, default=str)
 
@@ -664,7 +674,8 @@ def _read_last_extracted(output_dir, kind, title):
             state = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return None
-    if kind == "list" and state.get("format") != GENERIC_LIST_FORMAT:
+    expected_format = LIBRARY_FORMAT if kind == "library" else GENERIC_LIST_FORMAT
+    if state.get("format") != expected_format:
         return None
     return state.get("last_item_modified_date")
 
@@ -755,9 +766,10 @@ def _write_last_extracted(output_dir, kind, title, last_item_modified_date):
     """Save LastItemModifiedDate so the next run can skip an unchanged list."""
     path = _state_path(output_dir, kind, title)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    state = {"last_item_modified_date": last_item_modified_date}
-    if kind == "list":
-        state["format"] = GENERIC_LIST_FORMAT
+    state = {
+        "last_item_modified_date": last_item_modified_date,
+        "format": LIBRARY_FORMAT if kind == "library" else GENERIC_LIST_FORMAT,
+    }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(state, f)
 

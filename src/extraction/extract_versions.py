@@ -3,7 +3,8 @@
 Write a <file>.versions.json next to each extracted .meta.json: current
 version plus every past version (label, size, date, author, comment, URL).
 
-- One call per file; files with a .versions.json are skipped (resume).
+- One call per file; files with a .versions.json are skipped (resume), and
+  so are folders and document sets.
 - /versions excludes the current version, read from the File instead.
 - 0.1 drafts have no history: no call made. Neither has 1.0 in a library
   without minor versions; the setting is read once per library.
@@ -165,6 +166,7 @@ def extract_site_versions(site_dir, username, password, ca_bundle_path, logger):
     counts = {
         "queried": 0,
         "skipped_no_history": 0,
+        "skipped_folders": 0,
         "skipped_already_done": 0,
         "errors": 0,
     }
@@ -184,6 +186,9 @@ def extract_site_versions(site_dir, username, password, ca_bundle_path, logger):
 
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
+        if meta.get("FileSystemObjectType") == 1:  # folder or document set
+            counts["skipped_folders"] += 1
+            continue
         label = meta.get("OData__UIVersionString")
         file_ref = meta.get("FileRef")
         minor_versions = None

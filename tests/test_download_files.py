@@ -162,6 +162,27 @@ class DiscoverAllDownloadableFilesTest(unittest.TestCase):
         )
         self.logger.warning.assert_not_called()
 
+    def test_folders_are_not_downloaded_and_do_not_count_in_the_limit(self):
+        self.extracted_site("team", "https://sp/team", "/team/Documents/b.docx")
+        lib_dir = os.path.join(self.extraction_dir, "intranet", "team", "documents")
+        with open(os.path.join(lib_dir, "Documents", "Archive.meta.json"), "w") as f:
+            json.dump(
+                {
+                    "FileLeafRef": "Archive",
+                    "FileRef": "/team/Documents/Archive",
+                    "FileSystemObjectType": 1,
+                    "Id": 2,
+                },
+                f,
+            )
+        os.makedirs(os.path.join(lib_dir, "Documents", "Archive"))
+
+        tasks = df.discover_all_downloadable_files(
+            self.extraction_dir, self.logger, limit=1
+        )
+
+        self.assertEqual([t["name"] for t in tasks], ["b.docx"])
+
 
 if __name__ == "__main__":
     unittest.main()
