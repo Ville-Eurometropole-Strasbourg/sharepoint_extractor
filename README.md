@@ -7,7 +7,7 @@ It extracts, site by site:
 - document libraries: one `.meta.json` per file, then the binaries;
 - the version history of each file, with the binaries of past versions;
 - generic lists: items, schema, and item attachments;
-- permissions of each site, and of lists with broken inheritance;
+- permissions of each site, of lists with broken inheritance, and of folders, files and list items with their own permissions;
 - wiki and publishing pages (inventory, body, page history);
 - the user table of each site collection.
 
@@ -96,7 +96,8 @@ Commands run in the container, from the project root: `docker compose run --rm s
 - Paths use the default `SPX_OUTPUT_DIR` (`discovery_output`).
 - `<site>` is the site's folder name under `discovery_output/extraction/<root>/`: `_root` for the root site itself (`SPX_SITE_URL`), else the last segment of its URL, or the whole path joined with `-` when several sites of the root share that segment.
 - A single site can be extracted with `extract_metadata.py /sites/hr/team`. Its result is merged into the root's `run_summary.json`.
-- `extract_metadata.py --permissions-all` (menu: Permissions catch-up) re-extracts the permissions of every site already extracted without error.
+- `extract_metadata.py --permissions-all` (menu: Permissions catch-up) extracts the permissions of every site already extracted without error whose `permissions.json` is missing or predates the current format (`format` 2, which adds folder, file and item permissions). Up-to-date files are skipped.
+- Permissions are read for every list but the hidden ones the metadata extraction skips: system lists such as `SitePages` or `Style Library` are kept, as only their content is skipped. Folders, files and items are scanned for their own permissions: one paged read per non-empty list, then one role assignment read per item found. SharePoint group members are read once per site. Anything that could not be read is listed in `items_scan_errors`.
 - `download_files.py` also works per site (`--site <site>`) or per library (`<site path> <library title>`), with `--workers N` (default 6) and `--limit N`.
 - Do not run two scripts on the same root at the same time.
 
@@ -110,7 +111,7 @@ discovery_output/
     │   versions_run_summary.json, attachments_run_summary.json
     └── <site>/
         ├── site_metadata.json
-        ├── permissions.json                        site permissions, lists with broken inheritance
+        ├── permissions.json                        site permissions, lists and items with broken inheritance
         ├── documents/<library>/
         │   ├── _schema_columns.json, .state.json
         │   └── <folders>/<file>                    binary

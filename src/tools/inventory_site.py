@@ -113,6 +113,18 @@ def permissions_section(site_dir, list_names):
     broken = data.get("lists_with_broken_inheritance") or {}
     print(f"  site-level principals: {len(site)}")
     print(f"  lists/libraries with broken inheritance: {len(broken)}")
+    items_by_list = data.get("items_with_broken_inheritance")
+    if items_by_list is None:
+        print("  items with broken inheritance: not extracted (older permissions.json)")
+    else:
+        kinds = Counter(
+            str(item.get("kind")) for items in items_by_list.values() for item in items
+        )
+        print(
+            f"  items with broken inheritance: {sum(kinds.values())}"
+            + "".join(f", {k}={c}" for k, c in sorted(kinds.items()))
+        )
+        print(f"  item scan errors: {len(data.get('items_scan_errors') or [])}")
     types = Counter()
     roles = Counter()
     for principals in [site] + list(broken.values()):
