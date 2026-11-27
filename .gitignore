@@ -6,6 +6,7 @@ certs/
 
 # Data produced by the pipeline
 /discovery_output*/
+/discovery_output_test*/
 *.csv
 stats_summary.json
 
